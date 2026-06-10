@@ -1,0 +1,750 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PID 交互式教学实验室</title>
+<style>
+  :root {
+    --bg: #12161c; --panel: #1b222c; --panel2: #222b37;
+    --accent: #4fc3f7; --accent2: #ffb74d; --green: #81c784; --red: #e57373;
+    --text: #dfe6ee; --dim: #8a97a6; --border: #2e3a48;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: "Microsoft YaHei", "PingFang SC", "Segoe UI", sans-serif;
+    line-height: 1.7;
+  }
+  header { text-align: center; padding: 22px 10px 8px; }
+  header h1 { font-size: 26px; color: var(--accent); letter-spacing: 2px; }
+  header p { color: var(--dim); font-size: 14px; }
+  nav { display: flex; justify-content: center; gap: 8px; flex-wrap: wrap; padding: 14px; position: sticky; top: 0; background: var(--bg); z-index: 10; border-bottom: 1px solid var(--border); }
+  nav button {
+    background: var(--panel); color: var(--text); border: 1px solid var(--border);
+    padding: 9px 20px; border-radius: 20px; cursor: pointer; font-size: 15px; transition: .15s;
+  }
+  nav button:hover { border-color: var(--accent); }
+  nav button.active { background: var(--accent); color: #04263b; font-weight: bold; border-color: var(--accent); }
+  main { max-width: 1180px; margin: 0 auto; padding: 18px; }
+  section.tab { display: none; }
+  section.tab.active { display: block; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 18px 22px; margin-bottom: 16px; }
+  .card h2 { color: var(--accent); font-size: 20px; margin-bottom: 10px; }
+  .card h3 { color: var(--accent2); font-size: 16px; margin: 14px 0 6px; }
+  .formula { background: var(--panel2); border-left: 3px solid var(--accent); padding: 10px 16px; margin: 10px 0; font-family: "Cambria Math", Georgia, serif; font-size: 17px; border-radius: 6px; overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 14px; }
+  th, td { border: 1px solid var(--border); padding: 7px 10px; text-align: center; }
+  th { background: var(--panel2); color: var(--accent); }
+  .sim-wrap { display: flex; gap: 14px; flex-wrap: wrap; }
+  .anim-box { flex: 0 0 300px; }
+  .chart-box { flex: 1 1 480px; min-width: 320px; }
+  canvas { background: #0d1117; border: 1px solid var(--border); border-radius: 10px; display: block; width: 100%; }
+  .controls { display: flex; gap: 24px; flex-wrap: wrap; margin-top: 14px; align-items: flex-start; }
+  .sliders { flex: 1 1 340px; }
+  .slider-row { display: flex; align-items: center; gap: 10px; margin: 8px 0; }
+  .slider-row label { width: 120px; font-size: 14px; }
+  .slider-row input[type=range] { flex: 1; accent-color: var(--accent); }
+  .slider-row .val { width: 70px; text-align: right; font-family: Consolas, monospace; color: var(--accent2); }
+  .btns { flex: 1 1 300px; display: flex; flex-wrap: wrap; gap: 8px; align-content: flex-start; }
+  .btns button {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 8px; padding: 7px 14px; cursor: pointer; font-size: 13px;
+  }
+  .btns button:hover { border-color: var(--accent); color: var(--accent); }
+  .btns button.danger { border-color: #7a4a4a; }
+  .btns button.danger:hover { border-color: var(--red); color: var(--red); }
+  .metrics { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 12px; }
+  .metric { background: var(--panel2); border-radius: 8px; padding: 8px 16px; font-size: 13px; color: var(--dim); }
+  .metric b { display: block; font-size: 18px; color: var(--text); font-family: Consolas, monospace; }
+  .pid-bars { margin-top: 12px; }
+  .bar-row { display: flex; align-items: center; gap: 8px; font-size: 13px; margin: 4px 0; }
+  .bar-row span.lab { width: 80px; color: var(--dim); }
+  .bar-track { flex: 1; height: 14px; background: #0d1117; border-radius: 7px; position: relative; overflow: hidden; }
+  .bar-fill { position: absolute; top: 0; bottom: 0; border-radius: 7px; transition: width .08s; }
+  .note { color: var(--dim); font-size: 13px; margin-top: 8px; }
+  .hl { color: var(--accent2); }
+  ul, ol { padding-left: 24px; }
+  li { margin: 4px 0; }
+  footer { text-align: center; color: var(--dim); font-size: 12px; padding: 24px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>⚙ PID 交互式教学实验室</h1>
+  <p>拖动滑块，实时观察 Kp · Ki · Kd 对系统行为的影响 —— 离线单文件，双击即用</p>
+</header>
+
+<nav id="nav">
+  <button data-tab="theory" class="active">📖 原理讲解</button>
+  <button data-tab="lab">🧪 参数实验室</button>
+  <button data-tab="motor">🔄 场景一·电机转速</button>
+  <button data-tab="temp">🌡 场景二·恒温控制</button>
+  <button data-tab="drone">🚁 场景三·无人机定高</button>
+</nav>
+
+<main>
+
+<!-- ===================== 原理讲解 ===================== -->
+<section class="tab active" id="tab-theory">
+  <div class="card">
+    <h2>一、什么是 PID？</h2>
+    <p>PID 控制器是工业界使用最广泛的反馈控制算法。它持续测量<span class="hl">误差 e(t) = 设定值 − 实际值</span>，
+    并把误差的「现在(P)」「过去(I)」「未来(D)」三种信息加权求和，得到控制输出 u(t)：</p>
+    <div class="formula">u(t) = K<sub>p</sub>·e(t) + K<sub>i</sub>·∫₀ᵗ e(τ)dτ + K<sub>d</sub>·de(t)/dt</div>
+    <p>离散实现（采样周期 Δt）：</p>
+    <div class="formula">u[k] = K<sub>p</sub>·e[k] + K<sub>i</sub>·Σe[j]·Δt + K<sub>d</sub>·(e[k]−e[k−1])/Δt</div>
+  </div>
+
+  <div class="card">
+    <h2>二、多维度理解三个参数</h2>
+    <h3>维度 1 · 数学含义</h3>
+    <ul>
+      <li><b style="color:var(--accent)">P（比例）</b>：只看<span class="hl">当前误差</span>。误差越大，出力越大。但误差为零时出力也为零，所以面对持续扰动（如重力、负载、散热）会留下<span class="hl">稳态误差</span>。</li>
+      <li><b style="color:var(--green)">I（积分）</b>：累加<span class="hl">历史误差</span>。只要误差不归零，积分就不断增长，最终顶住恒定扰动、<span class="hl">消除稳态误差</span>；代价是响应变"钝"、容易超调甚至振荡。</li>
+      <li><b style="color:var(--red)">D（微分）</b>：看误差的<span class="hl">变化趋势</span>。误差快速缩小时提前"踩刹车"，抑制超调、增加阻尼；但对测量噪声非常敏感。</li>
+    </ul>
+    <h3>维度 2 · 物理直觉（开车类比）</h3>
+    <ul>
+      <li>P：离目的地越远，油门踩得越深；</li>
+      <li>I：发现一直被顶头风拖慢（误差一直在），就额外多给一点油，且越欠越补；</li>
+      <li>D：眼看就要冲过停车线了（误差迅速变小），提前松油门带刹车。</li>
+    </ul>
+    <h3>维度 3 · 时域响应特征（增大某一参数的影响）</h3>
+    <table>
+      <tr><th>增大参数</th><th>上升时间</th><th>超调量</th><th>调节时间</th><th>稳态误差</th><th>稳定性</th></tr>
+      <tr><td>Kp ↑</td><td>减小</td><td>增大</td><td>小幅变化</td><td>减小(不消除)</td><td>变差</td></tr>
+      <tr><td>Ki ↑</td><td>减小</td><td>增大</td><td>增大</td><td><b>消除</b></td><td>变差</td></tr>
+      <tr><td>Kd ↑</td><td>小幅变化</td><td><b>减小</b></td><td>减小</td><td>无影响</td><td>改善(噪声小时)</td></tr>
+    </table>
+    <h3>维度 4 · 工程实践要点</h3>
+    <ul>
+      <li><span class="hl">积分饱和 (Windup)</span>：执行器到达极限（阀门全开、电压到顶）后误差仍在累积，积分越攒越大，导致回程时巨大超调。解决：积分限幅 / 反算抗饱和。本网站的仿真均内置了抗饱和，可在"恒温控制"场景中体会。</li>
+      <li><span class="hl">微分噪声</span>：D 项放大高频噪声，工程上常加一阶低通滤波，或改为"对测量值微分"。</li>
+      <li><span class="hl">输出限幅</span>：真实执行器都有上下限，仿真中也做了限幅，更贴近实际。</li>
+      <li><span class="hl">采样周期</span>：离散 PID 的 Δt 应远小于系统时间常数（经验上 1/10 以下）。</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2>三、手动调参口诀与步骤（试凑法）</h2>
+    <p style="color:var(--accent2)">"参数整定找最佳，从小到大顺序查；先是比例后积分，最后再把微分加。"</p>
+    <ol>
+      <li>令 Ki=Kd=0，从小到大增大 Kp，直到系统响应足够快、出现轻微振荡，然后退回一些；</li>
+      <li>逐步加入 Ki 消除稳态误差，Ki 过大会引起缓慢振荡，需折中；</li>
+      <li>若超调仍偏大，加入少量 Kd 增加阻尼；噪声大的系统慎用 D；</li>
+      <li>施加扰动（本网站每个场景都有扰动按钮）检验抗扰能力，反复微调。</li>
+    </ol>
+    <p class="note">建议顺序游玩：参数实验室 → 电机（看 I 抗负载）→ 恒温（看积分饱和）→ 无人机（看重力稳态误差与 D 的阻尼作用）。</p>
+  </div>
+</section>
+
+<!-- ===================== 参数实验室 ===================== -->
+<section class="tab" id="tab-lab">
+  <div class="card">
+    <h2>🧪 参数实验室 —— 二阶系统位置控制</h2>
+    <p class="note">被控对象：m·x″ = u − c·x′（质量块推到目标位置）。这是最能展现超调与振荡的教学对象。先只用 P，再加 I、加 D，观察曲线变化。</p>
+    <div class="sim-wrap">
+      <div class="anim-box"><canvas id="lab-anim" width="300" height="300"></canvas></div>
+      <div class="chart-box"><canvas id="lab-chart" width="700" height="300"></canvas></div>
+    </div>
+    <div class="controls">
+      <div class="sliders" id="lab-sliders"></div>
+      <div class="btns" id="lab-btns"></div>
+    </div>
+    <div class="pid-bars" id="lab-bars"></div>
+    <div class="metrics" id="lab-metrics"></div>
+  </div>
+  <div class="card">
+    <h3>实验建议</h3>
+    <ul>
+      <li>预设「纯 P」：注意没有持续扰动时纯 P 也能到达目标，但 Kp 大了会振荡；</li>
+      <li>把 Kp 拉到 80 以上：等幅振荡边缘 → 这就是临界增益的概念；</li>
+      <li>预设「PD」再对比「PID」：D 是阻尼，I 是除稳态误差的"慢功夫"；</li>
+      <li>点「施加外力扰动」：观察只有含 I 的组合能完全顶回扰动。</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ===================== 电机 ===================== -->
+<section class="tab" id="tab-motor">
+  <div class="card">
+    <h2>🔄 场景一 · 直流电机转速控制</h2>
+    <p class="note">模型：J·ω′ = K·u − b·ω − T<sub>load</sub>，电压限幅 ±24V。目标：让转盘稳定在设定转速，加上负载后仍能恢复。</p>
+    <div class="sim-wrap">
+      <div class="anim-box"><canvas id="motor-anim" width="300" height="300"></canvas></div>
+      <div class="chart-box"><canvas id="motor-chart" width="700" height="300"></canvas></div>
+    </div>
+    <div class="controls">
+      <div class="sliders" id="motor-sliders"></div>
+      <div class="btns" id="motor-btns"></div>
+    </div>
+    <div class="pid-bars" id="motor-bars"></div>
+    <div class="metrics" id="motor-metrics"></div>
+  </div>
+  <div class="card">
+    <h3>这个场景教会你什么？</h3>
+    <ul>
+      <li>转速控制对象近似一阶系统，纯 P 就能跟得不错——直到<span class="hl">负载出现</span>；</li>
+      <li>点「加载负载」：纯 P 时转速被压低且<span class="hl">永远回不去</span>（稳态误差 = 负载/某常数 ÷ Kp 相关），因为误差必须留着才能维持出力；</li>
+      <li>加入 Ki 后再加载：转速短暂跌落后被积分"扛"回设定值——这就是 I 项的核心价值；</li>
+      <li>电压表顶到 ±24V 说明执行器饱和，此时加大 Kp 也无济于事。</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ===================== 恒温 ===================== -->
+<section class="tab" id="tab-temp">
+  <div class="card">
+    <h2>🌡 场景二 · 恒温箱温度控制（时间 20 倍速）</h2>
+    <p class="note">模型：C·T′ = P<sub>max</sub>·u − h·(T − T<sub>env</sub>)，加热功率 0~1000W，<b>只能加热不能制冷</b>（单向执行器），环境温度 25℃。热过程慢，已按 20 倍速播放。</p>
+    <div class="sim-wrap">
+      <div class="anim-box"><canvas id="temp-anim" width="300" height="300"></canvas></div>
+      <div class="chart-box"><canvas id="temp-chart" width="700" height="300"></canvas></div>
+    </div>
+    <div class="controls">
+      <div class="sliders" id="temp-sliders"></div>
+      <div class="btns" id="temp-btns"></div>
+    </div>
+    <div class="pid-bars" id="temp-bars"></div>
+    <div class="metrics" id="temp-metrics"></div>
+  </div>
+  <div class="card">
+    <h3>这个场景教会你什么？</h3>
+    <ul>
+      <li>温度系统时间常数大（升温慢），而且<span class="hl">只能加热、降温全靠散热</span>，超调的代价是"等它自己凉下来"；</li>
+      <li>把 Ki 调大并切换目标温度：升温阶段加热器满功率（饱和），若无抗饱和，积分疯长会导致冲过目标好几度——本仿真内置抗饱和，可点「关闭抗饱和」按钮对比灾难效果；</li>
+      <li>「开盖散热」相当于散热突然加剧的持续扰动，再次体现 I 项扛扰动；「倒入冷水」是阶跃式状态扰动；</li>
+      <li>适量 Kd 能在温度逼近目标时提前收油，明显减小超调。</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ===================== 无人机 ===================== -->
+<section class="tab" id="tab-drone">
+  <div class="card">
+    <h2>🚁 场景三 · 无人机定高悬停</h2>
+    <p class="note">模型：m·z″ = u·F<sub>max</sub> − m·g（m=1kg，最大推力 20N，油门 0~100%）。悬停需要持续约 49% 油门对抗重力——重力就是一个<b>永不消失的恒定扰动</b>。</p>
+    <div class="sim-wrap">
+      <div class="anim-box"><canvas id="drone-anim" width="300" height="300"></canvas></div>
+      <div class="chart-box"><canvas id="drone-chart" width="700" height="300"></canvas></div>
+    </div>
+    <div class="controls">
+      <div class="sliders" id="drone-sliders"></div>
+      <div class="btns" id="drone-btns"></div>
+    </div>
+    <div class="pid-bars" id="drone-bars"></div>
+    <div class="metrics" id="drone-metrics"></div>
+  </div>
+  <div class="card">
+    <h3>这个场景教会你什么？</h3>
+    <ul>
+      <li>预设「纯 P」：无人机悬停在<span class="hl">目标之下</span>——必须留着一段误差来产生抵抗重力的油门，这就是恒定扰动下 P 控制的本质缺陷；</li>
+      <li>加入 Ki：积分慢慢攒出"悬停油门"，机体贴线悬停（真机上常用前馈 + 小积分实现同样效果）；</li>
+      <li>双积分对象（推力→加速度→速度→高度）天生容易振荡，<span class="hl">Kd 在这里相当于人造空气阻尼</span>，几乎不可缺少——试试把 Kd 归零；</li>
+      <li>点「阵风」：观察 D 项第一时间产生强烈反应（它看的是变化率），P、I 随后跟进。</li>
+    </ul>
+  </div>
+</section>
+
+</main>
+<footer>PID 交互式教学实验室 · 单文件离线版 · 仿真采用定步长欧拉积分 + 位置式 PID（含输出限幅与反算抗积分饱和）</footer>
+
+<script>
+"use strict";
+/* ============ 通用：PID 控制器 ============ */
+class PID {
+  constructor(kp, ki, kd, outMin, outMax) {
+    this.kp = kp; this.ki = ki; this.kd = kd;
+    this.outMin = outMin; this.outMax = outMax;
+    this.antiWindup = true;
+    this.reset();
+  }
+  reset() { this.integ = 0; this.prevErr = null; this.p = 0; this.i = 0; this.d = 0; this.u = 0; }
+  step(sp, pv, dt) {
+    const err = sp - pv;
+    this.integ += err * dt;
+    const dTerm = (this.prevErr === null) ? 0 : this.kd * (err - this.prevErr) / dt;
+    this.prevErr = err;
+    let p = this.kp * err, i = this.ki * this.integ;
+    let u = p + i + dTerm;
+    if (u > this.outMax) {
+      if (this.antiWindup && this.ki > 0) { this.integ -= (u - this.outMax) / this.ki; i = this.ki * this.integ; }
+      u = this.outMax;
+    } else if (u < this.outMin) {
+      if (this.antiWindup && this.ki > 0) { this.integ -= (u - this.outMin) / this.ki; i = this.ki * this.integ; }
+      u = this.outMin;
+    }
+    this.p = p; this.i = i; this.d = dTerm; this.u = u;
+    return u;
+  }
+}
+
+/* ============ 通用：曲线图 ============ */
+function drawChart(canvas, series, tNow, tWin, yMin, yMax, yLabel) {
+  const ctx = canvas.getContext("2d");
+  const W = canvas.width, H = canvas.height;
+  const padL = 46, padR = 10, padT = 24, padB = 26;
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = "#0d1117"; ctx.fillRect(0, 0, W, H);
+  const x0 = padL, x1 = W - padR, y0 = H - padB, y1 = padT;
+  const tx = t => x0 + (x1 - x0) * (t - (tNow - tWin)) / tWin;
+  const ty = v => y0 - (y0 - y1) * (v - yMin) / (yMax - yMin);
+  // 网格
+  ctx.strokeStyle = "#1f2935"; ctx.fillStyle = "#65788c"; ctx.font = "11px Consolas, monospace";
+  ctx.lineWidth = 1;
+  for (let g = 0; g <= 4; g++) {
+    const v = yMin + (yMax - yMin) * g / 4, y = ty(v);
+    ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x1, y); ctx.stroke();
+    ctx.fillText(v.toFixed(Math.abs(yMax - yMin) >= 20 ? 0 : 1), 6, y + 4);
+  }
+  for (let g = 0; g <= 6; g++) {
+    const t = tNow - tWin + tWin * g / 6, x = tx(t);
+    ctx.beginPath(); ctx.moveTo(x, y0); ctx.lineTo(x, y1); ctx.stroke();
+    if (g > 0) ctx.fillText(t.toFixed(0) + "s", x - 14, H - 8);
+  }
+  ctx.fillText(yLabel, 6, 14);
+  // 曲线
+  for (const s of series) {
+    ctx.strokeStyle = s.color; ctx.lineWidth = s.width || 2;
+    ctx.setLineDash(s.dash || []);
+    ctx.beginPath();
+    let started = false;
+    for (const pt of s.data) {
+      if (pt.t < tNow - tWin) continue;
+      const x = tx(pt.t), y = Math.max(y1, Math.min(y0, ty(pt.v)));
+      if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
+    }
+    ctx.stroke(); ctx.setLineDash([]);
+  }
+  // 图例
+  let lx = x0 + 8;
+  ctx.font = "12px sans-serif";
+  for (const s of series) {
+    ctx.strokeStyle = s.color; ctx.lineWidth = 2.5; ctx.setLineDash(s.dash || []);
+    ctx.beginPath(); ctx.moveTo(lx, 14); ctx.lineTo(lx + 22, 14); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = "#aebccb"; ctx.fillText(s.name, lx + 27, 18);
+    lx += 27 + ctx.measureText(s.name).width + 18;
+  }
+}
+
+/* ============ 通用：UI 构建 ============ */
+function makeSliders(containerId, defs, onChange) {
+  const box = document.getElementById(containerId);
+  const refs = {};
+  for (const d of defs) {
+    const row = document.createElement("div"); row.className = "slider-row";
+    const lab = document.createElement("label"); lab.textContent = d.label;
+    const inp = document.createElement("input");
+    inp.type = "range"; inp.min = d.min; inp.max = d.max; inp.step = d.step; inp.value = d.value;
+    const val = document.createElement("span"); val.className = "val"; val.textContent = (+d.value).toFixed(d.dec);
+    inp.addEventListener("input", () => { val.textContent = (+inp.value).toFixed(d.dec); onChange(d.key, +inp.value); });
+    row.append(lab, inp, val); box.appendChild(row);
+    refs[d.key] = { inp, val, dec: d.dec };
+  }
+  return {
+    set(key, v) { const r = refs[key]; r.inp.value = v; r.val.textContent = (+v).toFixed(r.dec); onChange(key, +v); }
+  };
+}
+function makeButtons(containerId, defs) {
+  const box = document.getElementById(containerId);
+  for (const d of defs) {
+    const b = document.createElement("button");
+    b.textContent = d.label; if (d.danger) b.className = "danger";
+    b.addEventListener("click", d.fn);
+    box.appendChild(b);
+  }
+}
+function makeBars(containerId) {
+  const box = document.getElementById(containerId);
+  const items = [["P 分量", "#4fc3f7"], ["I 分量", "#81c784"], ["D 分量", "#e57373"], ["输出 u", "#ffb74d"]];
+  const fills = [];
+  for (const [name, color] of items) {
+    const row = document.createElement("div"); row.className = "bar-row";
+    const lab = document.createElement("span"); lab.className = "lab"; lab.textContent = name;
+    const track = document.createElement("div"); track.className = "bar-track";
+    const mid = document.createElement("div");
+    mid.style.cssText = "position:absolute;left:50%;top:0;bottom:0;width:1px;background:#3a4757";
+    const fill = document.createElement("div"); fill.className = "bar-fill"; fill.style.background = color;
+    const num = document.createElement("span"); num.className = "val"; num.style.width = "76px"; num.style.textAlign = "right";
+    num.style.fontFamily = "Consolas, monospace"; num.style.fontSize = "12px"; num.style.color = "#aebccb";
+    track.append(mid, fill); row.append(lab, track, num); box.appendChild(row);
+    fills.push({ fill, num });
+  }
+  return function update(vals, scale) { // vals = [p,i,d,u]
+    vals.forEach((v, k) => {
+      const frac = Math.max(-1, Math.min(1, v / scale));
+      const f = fills[k];
+      if (frac >= 0) { f.fill.style.left = "50%"; f.fill.style.width = (frac * 50) + "%"; }
+      else { f.fill.style.left = (50 + frac * 50) + "%"; f.fill.style.width = (-frac * 50) + "%"; }
+      f.num.textContent = v.toFixed(2);
+    });
+  };
+}
+function makeMetrics(containerId, names) {
+  const box = document.getElementById(containerId);
+  const els = names.map(n => {
+    const m = document.createElement("div"); m.className = "metric";
+    m.innerHTML = n + "<b>--</b>"; box.appendChild(m);
+    return m.querySelector("b");
+  });
+  return (vals) => vals.forEach((v, i) => els[i].textContent = v);
+}
+
+/* ============ 仿真基类：历史记录 ============ */
+class History {
+  constructor() { this.sp = []; this.pv = []; this.u = []; }
+  push(t, sp, pv, u, tWin) {
+    this.sp.push({ t, v: sp }); this.pv.push({ t, v: pv }); this.u.push({ t, v: u });
+    const cut = t - tWin - 1;
+    while (this.sp.length && this.sp[0].t < cut) { this.sp.shift(); this.pv.shift(); this.u.shift(); }
+  }
+  clear() { this.sp.length = 0; this.pv.length = 0; this.u.length = 0; }
+}
+
+/* ================================================================
+   模块 1：参数实验室（二阶位置系统） m x'' = u - c x'
+================================================================ */
+const lab = (() => {
+  const m = 1.0, c = 1.2;
+  const pid = new PID(20, 0, 0, -60, 60);
+  let x = 0, v = 0, sp = 1, t = 0, dist = 0;
+  let peak = 0;
+  const hist = new History();
+  const TWIN = 12, DT = 0.002;
+
+  const sliders = makeSliders("lab-sliders", [
+    { key: "kp", label: "Kp 比例", min: 0, max: 100, step: 0.5, value: 20, dec: 1 },
+    { key: "ki", label: "Ki 积分", min: 0, max: 60, step: 0.5, value: 0, dec: 1 },
+    { key: "kd", label: "Kd 微分", min: 0, max: 30, step: 0.1, value: 0, dec: 1 },
+    { key: "sp", label: "目标位置 (m)", min: -1.5, max: 1.5, step: 0.1, value: 1, dec: 1 },
+  ], (k, val) => {
+    if (k === "sp") { sp = val; peak = 0; }
+    else { pid[k] = val; }
+  });
+  function preset(kp, ki, kd) { sliders.set("kp", kp); sliders.set("ki", ki); sliders.set("kd", kd); reset(); }
+  function reset() { x = 0; v = 0; pid.reset(); hist.clear(); t = 0; peak = 0; dist = 0; }
+  makeButtons("lab-btns", [
+    { label: "纯 P", fn: () => preset(20, 0, 0) },
+    { label: "PI", fn: () => preset(20, 10, 0) },
+    { label: "PD", fn: () => preset(40, 0, 8) },
+    { label: "完整 PID", fn: () => preset(40, 15, 8) },
+    { label: "激进(振荡)", fn: () => preset(90, 40, 0) },
+    { label: "保守(慢)", fn: () => preset(6, 2, 4) },
+    { label: "施加外力扰动 (-15N)", danger: true, fn: () => { dist = (dist === 0 ? -15 : 0); } },
+    { label: "复位仿真", fn: reset },
+  ]);
+  const bars = makeBars("lab-bars");
+  const metrics = makeMetrics("lab-metrics", ["当前位置", "当前误差", "峰值超调", "控制输出"]);
+
+  function step() {
+    for (let i = 0; i < 8; i++) {
+      const u = pid.step(sp, x, DT);
+      const a = (u + dist - c * v) / m;
+      v += a * DT; x += v * DT; t += DT;
+      hist.push(t, sp, x, u, TWIN);
+    }
+    if (sp !== 0) {
+      const os = (x - sp) / Math.abs(sp) * 100 * Math.sign(sp);
+      if (os > peak) peak = os;
+    }
+  }
+  function draw() {
+    const cv = document.getElementById("lab-anim"), ctx = cv.getContext("2d");
+    ctx.clearRect(0, 0, 300, 300);
+    ctx.fillStyle = "#0d1117"; ctx.fillRect(0, 0, 300, 300);
+    // 轨道
+    ctx.strokeStyle = "#2e3a48"; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.moveTo(20, 200); ctx.lineTo(280, 200); ctx.stroke();
+    const px = p => 150 + p * 80;
+    // 目标
+    ctx.strokeStyle = "#ffb74d"; ctx.lineWidth = 2; ctx.setLineDash([5, 4]);
+    ctx.beginPath(); ctx.moveTo(px(sp), 120); ctx.lineTo(px(sp), 230); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = "#ffb74d"; ctx.font = "12px sans-serif"; ctx.fillText("目标", px(sp) - 12, 112);
+    // 质量块
+    ctx.fillStyle = "#4fc3f7";
+    ctx.fillRect(px(x) - 22, 162, 44, 36);
+    ctx.fillStyle = "#04263b"; ctx.font = "13px sans-serif"; ctx.fillText("m", px(x) - 5, 185);
+    // 力箭头
+    const u = pid.u;
+    if (Math.abs(u) > 0.5) {
+      ctx.strokeStyle = "#81c784"; ctx.lineWidth = 3;
+      const len = Math.max(-70, Math.min(70, u * 1.4));
+      const ax = px(x) + Math.sign(len) * 24;
+      ctx.beginPath(); ctx.moveTo(ax, 180); ctx.lineTo(ax + len, 180);
+      ctx.lineTo(ax + len - Math.sign(len) * 8, 174); ctx.moveTo(ax + len, 180);
+      ctx.lineTo(ax + len - Math.sign(len) * 8, 186); ctx.stroke();
+    }
+    if (dist !== 0) { ctx.fillStyle = "#e57373"; ctx.fillText("⚠ 外力扰动中 " + dist + "N", 20, 30); }
+    ctx.fillStyle = "#8a97a6"; ctx.fillText("位置 x = " + x.toFixed(3) + " m", 20, 280);
+
+    drawChart(document.getElementById("lab-chart"), [
+      { name: "设定值", color: "#ffb74d", dash: [6, 4], data: hist.sp },
+      { name: "实际位置", color: "#4fc3f7", data: hist.pv },
+      { name: "控制输出/40", color: "#81c78455", width: 1.5, data: hist.u.map(p => ({ t: p.t, v: p.v / 40 })) },
+    ], t, TWIN, -2, 2, "位置(m)");
+    bars([pid.p, pid.i, pid.d, pid.u], 60);
+    metrics([x.toFixed(3) + " m", (sp - x).toFixed(3) + " m",
+      peak > 0 ? peak.toFixed(1) + " %" : "--", pid.u.toFixed(1) + " N"]);
+  }
+  return { step, draw, reset };
+})();
+
+/* ================================================================
+   模块 2：电机转速  J ω' = K u - b ω - TL
+================================================================ */
+const motor = (() => {
+  const J = 0.1, b = 0.05, K = 0.5;
+  const pid = new PID(0.5, 0, 0, -24, 24);
+  let w = 0, t = 0, sp = 150, TL = 0, angle = 0;
+  const hist = new History();
+  const TWIN = 12, DT = 0.002;
+
+  const sliders = makeSliders("motor-sliders", [
+    { key: "kp", label: "Kp 比例", min: 0, max: 3, step: 0.02, value: 0.5, dec: 2 },
+    { key: "ki", label: "Ki 积分", min: 0, max: 5, step: 0.05, value: 0, dec: 2 },
+    { key: "kd", label: "Kd 微分", min: 0, max: 0.2, step: 0.002, value: 0, dec: 3 },
+    { key: "sp", label: "目标转速 (rad/s)", min: 0, max: 250, step: 5, value: 150, dec: 0 },
+  ], (k, val) => { if (k === "sp") sp = val; else pid[k] = val; });
+  function preset(kp, ki, kd) { sliders.set("kp", kp); sliders.set("ki", ki); sliders.set("kd", kd); reset(); }
+  function reset() { w = 0; t = 0; pid.reset(); hist.clear(); TL = 0; }
+  makeButtons("motor-btns", [
+    { label: "纯 P", fn: () => preset(0.5, 0, 0) },
+    { label: "PI（推荐）", fn: () => preset(0.5, 1.5, 0) },
+    { label: "激进 PI", fn: () => preset(2, 4.5, 0) },
+    { label: "加载负载 5 N·m", danger: true, fn: () => { TL = 5; } },
+    { label: "卸载负载", fn: () => { TL = 0; } },
+    { label: "复位仿真", fn: reset },
+  ]);
+  const bars = makeBars("motor-bars");
+  const metrics = makeMetrics("motor-metrics", ["实际转速", "转速误差", "电压输出", "负载转矩"]);
+
+  function step() {
+    for (let i = 0; i < 8; i++) {
+      const u = pid.step(sp, w, DT);
+      w += ((K * u - b * w - TL) / J) * DT;
+      if (w < 0 && TL > 0 && pid.u <= -24) w = Math.max(w, 0);
+      t += DT;
+      hist.push(t, sp, w, u, TWIN);
+    }
+    angle += w * 0.016 * 0.15; // 视觉减速
+  }
+  function draw() {
+    const cv = document.getElementById("motor-anim"), ctx = cv.getContext("2d");
+    ctx.clearRect(0, 0, 300, 300); ctx.fillStyle = "#0d1117"; ctx.fillRect(0, 0, 300, 300);
+    // 转盘
+    const cx = 150, cy = 130, R = 70;
+    ctx.strokeStyle = "#2e3a48"; ctx.lineWidth = 10;
+    ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = "#1b222c"; ctx.beginPath(); ctx.arc(cx, cy, R - 5, 0, Math.PI * 2); ctx.fill();
+    for (let s = 0; s < 4; s++) {
+      const a = angle + s * Math.PI / 2;
+      ctx.strokeStyle = s === 0 ? "#4fc3f7" : "#37485c"; ctx.lineWidth = 5;
+      ctx.beginPath(); ctx.moveTo(cx, cy);
+      ctx.lineTo(cx + Math.cos(a) * (R - 12), cy + Math.sin(a) * (R - 12)); ctx.stroke();
+    }
+    ctx.fillStyle = "#4fc3f7"; ctx.beginPath(); ctx.arc(cx, cy, 9, 0, Math.PI * 2); ctx.fill();
+    if (TL > 0) { ctx.fillStyle = "#e57373"; ctx.font = "13px sans-serif"; ctx.fillText("⚠ 负载 " + TL + " N·m", 105, 28); }
+    // 转速表
+    const gy = 245, gw = 220, gx = 40;
+    ctx.fillStyle = "#1b222c"; ctx.fillRect(gx, gy - 12, gw, 22);
+    ctx.fillStyle = "#4fc3f7"; ctx.fillRect(gx, gy - 12, gw * Math.max(0, Math.min(1, w / 250)), 22);
+    ctx.strokeStyle = "#ffb74d"; ctx.lineWidth = 2;
+    const sx = gx + gw * sp / 250;
+    ctx.beginPath(); ctx.moveTo(sx, gy - 16); ctx.lineTo(sx, gy + 14); ctx.stroke();
+    ctx.fillStyle = "#dfe6ee"; ctx.font = "12px Consolas, monospace";
+    ctx.fillText(w.toFixed(0) + " rad/s (" + (w * 9.549).toFixed(0) + " rpm)", gx + 4, gy + 32);
+
+    drawChart(document.getElementById("motor-chart"), [
+      { name: "目标转速", color: "#ffb74d", dash: [6, 4], data: hist.sp },
+      { name: "实际转速", color: "#4fc3f7", data: hist.pv },
+      { name: "电压×5", color: "#81c78455", width: 1.5, data: hist.u.map(p => ({ t: p.t, v: p.v * 5 })) },
+    ], t, TWIN, 0, 260, "rad/s");
+    bars([pid.p, pid.i, pid.d, pid.u], 24);
+    metrics([w.toFixed(1) + " rad/s", (sp - w).toFixed(1) + " rad/s",
+      pid.u.toFixed(1) + " V" + (Math.abs(pid.u) >= 23.9 ? " ⚠饱和" : ""), TL + " N·m"]);
+  }
+  return { step, draw, reset };
+})();
+
+/* ================================================================
+   模块 3：恒温箱  C T' = Pmax u - h (T - Tenv)，时间加速
+================================================================ */
+const temp = (() => {
+  const C = 500, Pmax = 1000, Tenv = 25;
+  let h = 10, hBase = 10;
+  const pid = new PID(0.08, 0, 0, 0, 1);
+  let T = 25, t = 0, sp = 60;
+  const hist = new History();
+  const TWIN = 300, DT = 0.05, SPEED = 20; // 每帧推进 SPEED*16ms 仿真时间
+
+  const sliders = makeSliders("temp-sliders", [
+    { key: "kp", label: "Kp 比例", min: 0, max: 0.5, step: 0.005, value: 0.08, dec: 3 },
+    { key: "ki", label: "Ki 积分", min: 0, max: 0.02, step: 0.0002, value: 0, dec: 4 },
+    { key: "kd", label: "Kd 微分", min: 0, max: 5, step: 0.05, value: 0, dec: 2 },
+    { key: "sp", label: "目标温度 (℃)", min: 30, max: 90, step: 1, value: 60, dec: 0 },
+  ], (k, val) => { if (k === "sp") sp = val; else pid[k] = val; });
+  function preset(kp, ki, kd) { sliders.set("kp", kp); sliders.set("ki", ki); sliders.set("kd", kd); reset(); }
+  function reset() { T = Tenv; t = 0; pid.reset(); hist.clear(); h = hBase; }
+  makeButtons("temp-btns", [
+    { label: "纯 P", fn: () => preset(0.08, 0, 0) },
+    { label: "PI", fn: () => preset(0.08, 0.002, 0) },
+    { label: "PID（推荐）", fn: () => preset(0.08, 0.002, 2) },
+    { label: "大积分(看超调)", fn: () => preset(0.05, 0.01, 0) },
+    { label: "开盖散热 ×3", danger: true, fn: () => { h = (h === hBase ? hBase * 3 : hBase); } },
+    { label: "倒入冷水 -15℃", danger: true, fn: () => { T = Math.max(Tenv - 5, T - 15); } },
+    { label: "切换抗饱和", fn: function () { pid.antiWindup = !pid.antiWindup; this.textContent = pid.antiWindup ? "切换抗饱和" : "⚠ 抗饱和已关"; } },
+    { label: "复位仿真", fn: reset },
+  ]);
+  const bars = makeBars("temp-bars");
+  const metrics = makeMetrics("temp-metrics", ["当前温度", "温度误差", "加热功率", "散热状态"]);
+
+  function step() {
+    const steps = Math.round(SPEED * 0.016 / DT);
+    for (let i = 0; i < steps; i++) {
+      const u = pid.step(sp, T, DT);
+      T += ((Pmax * u - h * (T - Tenv)) / C) * DT;
+      t += DT;
+      hist.push(t, sp, T, u, TWIN);
+    }
+  }
+  function draw() {
+    const cv = document.getElementById("temp-anim"), ctx = cv.getContext("2d");
+    ctx.clearRect(0, 0, 300, 300); ctx.fillStyle = "#0d1117"; ctx.fillRect(0, 0, 300, 300);
+    // 烧杯
+    const bx = 90, by = 60, bw = 120, bh = 160;
+    const frac = Math.max(0, Math.min(1, (T - 20) / 80));
+    const r = Math.round(60 + frac * 180), bl = Math.round(220 - frac * 160);
+    ctx.fillStyle = `rgb(${r},80,${bl})`;
+    ctx.fillRect(bx + 6, by + 30, bw - 12, bh - 36);
+    ctx.strokeStyle = "#5b6b7d"; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(bx, by + bh); ctx.lineTo(bx + bw, by + bh); ctx.lineTo(bx + bw, by); ctx.stroke();
+    // 加热器辉光
+    const glow = pid.u;
+    ctx.fillStyle = `rgba(255,${Math.round(120 + 80 * (1 - glow))},60,${0.15 + glow * 0.8})`;
+    ctx.fillRect(bx - 6, by + bh + 6, bw + 12, 14);
+    ctx.fillStyle = "#8a97a6"; ctx.font = "12px sans-serif";
+    ctx.fillText("加热器 " + (glow * 100).toFixed(0) + "%", bx + 20, by + bh + 36);
+    ctx.fillStyle = "#dfe6ee"; ctx.font = "bold 20px Consolas, monospace";
+    ctx.fillText(T.toFixed(1) + " ℃", bx + 24, by + 110);
+    if (h !== hBase) { ctx.fillStyle = "#e57373"; ctx.font = "13px sans-serif"; ctx.fillText("⚠ 开盖散热中", 105, 30); }
+    if (!pid.antiWindup) { ctx.fillStyle = "#e57373"; ctx.font = "13px sans-serif"; ctx.fillText("⚠ 抗积分饱和已关闭", 85, 48); }
+    ctx.fillStyle = "#8a97a6"; ctx.font = "12px sans-serif"; ctx.fillText("仿真时间 ×" + SPEED, 12, 290);
+
+    drawChart(document.getElementById("temp-chart"), [
+      { name: "目标温度", color: "#ffb74d", dash: [6, 4], data: hist.sp },
+      { name: "实际温度", color: "#4fc3f7", data: hist.pv },
+      { name: "功率%×0.6", color: "#81c78455", width: 1.5, data: hist.u.map(p => ({ t: p.t, v: 20 + p.v * 60 })) },
+    ], t, TWIN, 20, 100, "温度(℃)");
+    bars([pid.p, pid.i, pid.d, pid.u], 1);
+    metrics([T.toFixed(2) + " ℃", (sp - T).toFixed(2) + " ℃",
+      (pid.u * Pmax).toFixed(0) + " W" + (pid.u >= 0.999 ? " ⚠满功率" : ""),
+      h === hBase ? "正常" : "开盖×3"]);
+  }
+  return { step, draw, reset };
+})();
+
+/* ================================================================
+   模块 4：无人机定高  m z'' = u Fmax - m g
+================================================================ */
+const drone = (() => {
+  const m = 1, g = 9.8, Fmax = 20;
+  const pid = new PID(0.6, 0, 0, 0, 1);
+  let z = 0, vz = 0, t = 0, sp = 5, rotor = 0;
+  const hist = new History();
+  const TWIN = 12, DT = 0.002;
+
+  const sliders = makeSliders("drone-sliders", [
+    { key: "kp", label: "Kp 比例", min: 0, max: 2, step: 0.01, value: 0.6, dec: 2 },
+    { key: "ki", label: "Ki 积分", min: 0, max: 0.8, step: 0.01, value: 0, dec: 2 },
+    { key: "kd", label: "Kd 微分", min: 0, max: 1.5, step: 0.01, value: 0.45, dec: 2 },
+    { key: "sp", label: "目标高度 (m)", min: 1, max: 9, step: 0.5, value: 5, dec: 1 },
+  ], (k, val) => { if (k === "sp") sp = val; else pid[k] = val; });
+  function preset(kp, ki, kd) { sliders.set("kp", kp); sliders.set("ki", ki); sliders.set("kd", kd); reset(); }
+  function reset() { z = 0; vz = 0; t = 0; pid.reset(); hist.clear(); }
+  makeButtons("drone-btns", [
+    { label: "纯 P（悬停偏低）", fn: () => preset(0.6, 0, 0) },
+    { label: "PD（仍偏低）", fn: () => preset(0.6, 0, 0.45) },
+    { label: "PID（推荐）", fn: () => preset(0.6, 0.25, 0.45) },
+    { label: "去掉 D（振荡）", fn: () => preset(0.6, 0.25, 0) },
+    { label: "阵风扰动", danger: true, fn: () => { vz -= 2.5; } },
+    { label: "复位仿真", fn: reset },
+  ]);
+  const bars = makeBars("drone-bars");
+  const metrics = makeMetrics("drone-metrics", ["当前高度", "高度误差", "油门", "垂直速度"]);
+
+  function step() {
+    for (let i = 0; i < 8; i++) {
+      const u = pid.step(sp, z, DT);
+      const a = (u * Fmax) / m - g;
+      vz += a * DT; z += vz * DT;
+      if (z < 0) { z = 0; if (vz < 0) vz = 0; }
+      t += DT;
+      hist.push(t, sp, z, u, TWIN);
+    }
+    rotor += (0.3 + pid.u) * 1.2;
+  }
+  function draw() {
+    const cv = document.getElementById("drone-anim"), ctx = cv.getContext("2d");
+    ctx.clearRect(0, 0, 300, 300); ctx.fillStyle = "#0d1117"; ctx.fillRect(0, 0, 300, 300);
+    const zy = hM => 270 - hM * 25; // 0~10m -> 270~20
+    // 地面
+    ctx.fillStyle = "#27313e"; ctx.fillRect(0, 272, 300, 28);
+    // 高度刻度
+    ctx.strokeStyle = "#1f2935"; ctx.fillStyle = "#5b6b7d"; ctx.font = "10px Consolas, monospace";
+    for (let hM = 0; hM <= 10; hM += 2) {
+      ctx.beginPath(); ctx.moveTo(0, zy(hM)); ctx.lineTo(10, zy(hM)); ctx.stroke();
+      ctx.fillText(hM + "m", 14, zy(hM) + 3);
+    }
+    // 目标线
+    ctx.strokeStyle = "#ffb74d"; ctx.setLineDash([7, 5]); ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(40, zy(sp)); ctx.lineTo(290, zy(sp)); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = "#ffb74d"; ctx.font = "12px sans-serif"; ctx.fillText("目标 " + sp.toFixed(1) + "m", 230, zy(sp) - 6);
+    // 机体
+    const dy = zy(Math.min(10.5, z)), dx = 150;
+    ctx.fillStyle = "#4fc3f7"; ctx.fillRect(dx - 28, dy - 5, 56, 10);
+    ctx.fillStyle = "#2e3a48"; ctx.fillRect(dx - 10, dy - 13, 20, 9);
+    // 螺旋桨（模糊度随油门）
+    for (const side of [-1, 1]) {
+      const px = dx + side * 34;
+      ctx.strokeStyle = "#9fb3c8"; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.moveTo(dx + side * 24, dy - 4); ctx.lineTo(px, dy - 10); ctx.stroke();
+      const spread = 6 + pid.u * 16;
+      ctx.strokeStyle = `rgba(200,225,255,${0.25 + pid.u * 0.6})`; ctx.lineWidth = 2.5;
+      const wob = Math.sin(rotor) * 3;
+      ctx.beginPath(); ctx.moveTo(px - spread, dy - 12 + wob * 0.2); ctx.lineTo(px + spread, dy - 12 - wob * 0.2); ctx.stroke();
+    }
+    ctx.fillStyle = "#8a97a6"; ctx.font = "12px sans-serif";
+    ctx.fillText("悬停理论油门 ≈ " + (m * g / Fmax * 100).toFixed(0) + "%", 12, 292);
+
+    drawChart(document.getElementById("drone-chart"), [
+      { name: "目标高度", color: "#ffb74d", dash: [6, 4], data: hist.sp },
+      { name: "实际高度", color: "#4fc3f7", data: hist.pv },
+      { name: "油门×10", color: "#81c78455", width: 1.5, data: hist.u.map(p => ({ t: p.t, v: p.v * 10 })) },
+    ], t, TWIN, 0, 10, "高度(m)");
+    bars([pid.p, pid.i, pid.d, pid.u], 1);
+    metrics([z.toFixed(2) + " m", (sp - z).toFixed(2) + " m",
+      (pid.u * 100).toFixed(0) + " %", vz.toFixed(2) + " m/s"]);
+  }
+  return { step, draw, reset };
+})();
+
+/* ============ Tab 切换与主循环 ============ */
+const modules = { lab, motor, temp, drone };
+let activeTab = "theory";
+document.getElementById("nav").addEventListener("click", e => {
+  const btn = e.target.closest("button"); if (!btn) return;
+  document.querySelectorAll("#nav button").forEach(b => b.classList.toggle("active", b === btn));
+  activeTab = btn.dataset.tab;
+  document.querySelectorAll("section.tab").forEach(s => s.classList.toggle("active", s.id === "tab-" + activeTab));
+});
+function loop() {
+  const mod = modules[activeTab];
+  if (mod) { mod.step(); mod.draw(); }
+  requestAnimationFrame(loop);
+}
+loop();
+</script>
+</body>
+</html>
