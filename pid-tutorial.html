@@ -160,7 +160,7 @@
     <h3>实验建议</h3>
     <ul>
       <li>预设「纯 P」：注意没有持续扰动时纯 P 也能到达目标，但 Kp 大了会振荡；</li>
-      <li>把 Kp 拉到 80 以上：等幅振荡边缘 → 这就是临界增益的概念；</li>
+      <li>把 Kp 拉大：本对象纯 P 始终缓慢收敛，但 Kp 越大振荡衰减越慢；<span class="hl">真正的持续振荡来自积分</span>——理论上当 Ki &gt; 1.2·Kp 时本系统失稳（Routh 判据），预设「激进(等幅振荡)」正好压在 Ki = 1.2·Kp 的临界稳定边界上，可看到等幅振荡，此时只要加一点 Kd 就立即镇定；</li>
       <li>预设「PD」再对比「PID」：D 是阻尼，I 是除稳态误差的"慢功夫"；</li>
       <li>点「施加外力扰动」：观察只有含 I 的组合能完全顶回扰动。</li>
     </ul>
@@ -188,8 +188,8 @@
     <ul>
       <li>转速控制对象近似一阶系统，纯 P 就能跟得不错——直到<span class="hl">负载出现</span>；</li>
       <li>点「加载负载」：纯 P 时转速被压低且<span class="hl">永远回不去</span>（稳态误差 = 负载/某常数 ÷ Kp 相关），因为误差必须留着才能维持出力；</li>
-      <li>加入 Ki 后再加载：转速短暂跌落后被积分"扛"回设定值——这就是 I 项的核心价值；</li>
-      <li>电压表顶到 ±24V 说明执行器饱和，此时加大 Kp 也无济于事。</li>
+      <li>加入 Ki 后再加载（3 N·m）：转速短暂跌落后被积分"扛"回设定值——这就是 I 项的核心价值；</li>
+      <li>点「超重负载 6 N·m」：维持 150 rad/s 需要 (0.05×150+6)/0.5 = 27V，超过 ±24V 上限——<span class="hl">执行器饱和后，再完美的 PID 也到不了目标</span>（极限转速只有 120 rad/s）。这时盯着电压指标看"⚠饱和"，体会抗积分饱和为什么重要。</li>
     </ul>
   </div>
 </section>
@@ -430,7 +430,7 @@ const lab = (() => {
     { label: "PI", fn: () => preset(20, 10, 0) },
     { label: "PD", fn: () => preset(40, 0, 8) },
     { label: "完整 PID", fn: () => preset(40, 15, 8) },
-    { label: "激进(振荡)", fn: () => preset(90, 40, 0) },
+    { label: "激进(等幅振荡)", fn: () => preset(30, 36, 0) },
     { label: "保守(慢)", fn: () => preset(6, 2, 4) },
     { label: "施加外力扰动 (-15N)", danger: true, fn: () => { dist = (dist === 0 ? -15 : 0); } },
     { label: "复位仿真", fn: reset },
@@ -438,8 +438,11 @@ const lab = (() => {
   const bars = makeBars("lab-bars");
   const metrics = makeMetrics("lab-metrics", ["当前位置", "当前误差", "峰值超调", "控制输出"]);
 
-  function step() {
-    for (let i = 0; i < 8; i++) {
+  let acc = 0;
+  function step(elapsed) {
+    acc = Math.min(acc + elapsed, 0.1);
+    while (acc >= DT) {
+      acc -= DT;
       const u = pid.step(sp, x, DT);
       const a = (u + dist - c * v) / m;
       v += a * DT; x += v * DT; t += DT;
@@ -513,22 +516,26 @@ const motor = (() => {
     { label: "纯 P", fn: () => preset(0.5, 0, 0) },
     { label: "PI（推荐）", fn: () => preset(0.5, 1.5, 0) },
     { label: "激进 PI", fn: () => preset(2, 4.5, 0) },
-    { label: "加载负载 5 N·m", danger: true, fn: () => { TL = 5; } },
+    { label: "加载负载 3 N·m", danger: true, fn: () => { TL = 3; } },
+    { label: "超重负载 6 N·m(饱和)", danger: true, fn: () => { TL = 6; } },
     { label: "卸载负载", fn: () => { TL = 0; } },
     { label: "复位仿真", fn: reset },
   ]);
   const bars = makeBars("motor-bars");
   const metrics = makeMetrics("motor-metrics", ["实际转速", "转速误差", "电压输出", "负载转矩"]);
 
-  function step() {
-    for (let i = 0; i < 8; i++) {
+  let acc = 0;
+  function step(elapsed) {
+    acc = Math.min(acc + elapsed, 0.1);
+    while (acc >= DT) {
+      acc -= DT;
       const u = pid.step(sp, w, DT);
       w += ((K * u - b * w - TL) / J) * DT;
       if (w < 0 && TL > 0 && pid.u <= -24) w = Math.max(w, 0);
       t += DT;
       hist.push(t, sp, w, u, TWIN);
+      angle += w * DT * 0.15; // 视觉减速
     }
-    angle += w * 0.016 * 0.15; // 视觉减速
   }
   function draw() {
     const cv = document.getElementById("motor-anim"), ctx = cv.getContext("2d");
@@ -600,9 +607,11 @@ const temp = (() => {
   const bars = makeBars("temp-bars");
   const metrics = makeMetrics("temp-metrics", ["当前温度", "温度误差", "加热功率", "散热状态"]);
 
-  function step() {
-    const steps = Math.round(SPEED * 0.016 / DT);
-    for (let i = 0; i < steps; i++) {
+  let acc = 0;
+  function step(elapsed) {
+    acc = Math.min(acc + elapsed * SPEED, 2.0);
+    while (acc >= DT) {
+      acc -= DT;
       const u = pid.step(sp, T, DT);
       T += ((Pmax * u - h * (T - Tenv)) / C) * DT;
       t += DT;
@@ -674,16 +683,19 @@ const drone = (() => {
   const bars = makeBars("drone-bars");
   const metrics = makeMetrics("drone-metrics", ["当前高度", "高度误差", "油门", "垂直速度"]);
 
-  function step() {
-    for (let i = 0; i < 8; i++) {
+  let acc = 0;
+  function step(elapsed) {
+    acc = Math.min(acc + elapsed, 0.1);
+    while (acc >= DT) {
+      acc -= DT;
       const u = pid.step(sp, z, DT);
       const a = (u * Fmax) / m - g;
       vz += a * DT; z += vz * DT;
       if (z < 0) { z = 0; if (vz < 0) vz = 0; }
       t += DT;
       hist.push(t, sp, z, u, TWIN);
+      rotor += (0.3 + pid.u) * 0.15;
     }
-    rotor += (0.3 + pid.u) * 1.2;
   }
   function draw() {
     const cv = document.getElementById("drone-anim"), ctx = cv.getContext("2d");
@@ -739,12 +751,16 @@ document.getElementById("nav").addEventListener("click", e => {
   activeTab = btn.dataset.tab;
   document.querySelectorAll("section.tab").forEach(s => s.classList.toggle("active", s.id === "tab-" + activeTab));
 });
-function loop() {
+let lastTs = null;
+function loop(ts) {
+  if (lastTs === null) lastTs = ts;
+  const elapsed = Math.min(0.05, (ts - lastTs) / 1000);
+  lastTs = ts;
   const mod = modules[activeTab];
-  if (mod) { mod.step(); mod.draw(); }
+  if (mod) { mod.step(elapsed); mod.draw(); }
   requestAnimationFrame(loop);
 }
-loop();
+requestAnimationFrame(loop);
 </script>
 </body>
 </html>
