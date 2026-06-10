@@ -82,6 +82,7 @@
   <button data-tab="motor">🔄 场景一·电机转速</button>
   <button data-tab="temp">🌡 场景二·恒温控制</button>
   <button data-tab="drone">🚁 场景三·无人机定高</button>
+  <button data-tab="ois">📷 场景四·摄像头OIS防抖</button>
 </nav>
 
 <main>
@@ -244,6 +245,35 @@
       <li>加入 Ki：积分慢慢攒出"悬停油门"，机体贴线悬停（真机上常用前馈 + 小积分实现同样效果）；</li>
       <li>双积分对象（推力→加速度→速度→高度）天生容易振荡，<span class="hl">Kd 在这里相当于人造空气阻尼</span>，几乎不可缺少——试试把 Kd 归零；</li>
       <li>点「阵风」：观察 D 项第一时间产生强烈反应（它看的是变化率），P、I 随后跟进。</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ===================== OIS 防抖 ===================== -->
+<section class="tab" id="tab-ois">
+  <div class="card">
+    <h2>📷 场景四 · 摄像头光学防抖 OIS（俯视图）</h2>
+    <p class="note">模型：音圈电机（VCM）驱动镜片组，<b>机械阻尼极低（ζ=0.012）</b>，弹簧将镜片与机身耦合。摄像头晃动时弹簧把镜片"拖走"，OIS 通过 PID 把镜片拉回世界坐标原点（= 图像稳定）。<br>物理方程：m·x″ + b·x′ + k·x = K·u + k·x<sub>cam</sub>（m=1g，b=0.003，k=5.6 N/m，VCM K=5.6）</p>
+    <div class="sim-wrap">
+      <div class="anim-box"><canvas id="ois-anim" width="300" height="300"></canvas></div>
+      <div class="chart-box"><canvas id="ois-chart" width="700" height="300"></canvas></div>
+    </div>
+    <div class="controls">
+      <div class="sliders" id="ois-sliders"></div>
+      <div class="btns" id="ois-btns"></div>
+    </div>
+    <div class="pid-bars" id="ois-bars"></div>
+    <div class="metrics" id="ois-metrics"></div>
+  </div>
+  <div class="card">
+    <h3>这个场景教会你什么？</h3>
+    <ul>
+      <li><b>无防抖</b>：弹簧将镜片拖向机身位置，镜片随机身同步晃动，图像完全模糊；</li>
+      <li><b>纯 P=10（会振铃）</b>：P 把镜片拉回中心，防抖率约 91%——但机械阻尼极低（ζ=0.012），VCM 遇到<span class="hl">突发冲击（点击按钮）</span>后<span class="hl">会振铃长达约 2.9 秒</span>（在"有 OIS"取景框中可见快速抖动）；</li>
+      <li><b>PD 推荐</b>：Kd 提供<span class="hl">主动阻尼</span>，将闭环阻尼比从 0.012 提升至 0.66，冲击后 0.05s 内收敛——这是 D 项在高性能 VCM 中最关键的工程作用；</li>
+      <li><b>完整 PID</b>：Ki 消除<span class="hl">弹簧偏置/重力引起的静态偏差</span>（点"模拟相机倾斜"后对比有无 I 的静止误差）；</li>
+      <li><b>传感器噪声 ON + 大 Kd</b>：展示 D 的核心代价——D 对噪声的微分放大造成镜片高频抖动，这也是真实 OIS 限制 Kd 上限的原因；</li>
+      <li>俯视图中蓝色圆为 OIS 镜片，左下取景框（红）= 无防抖画面，右下（绿）= 有 OIS 画面，观察两个圆点的抖动幅度差异。</li>
     </ul>
   </div>
 </section>
@@ -743,7 +773,202 @@ const drone = (() => {
 })();
 
 /* ============ Tab 切换与主循环 ============ */
-const modules = { lab, motor, temp, drone };
+/* ================================================================
+   模块 5：OIS 光学防抖
+   物理：m x'' + b x' + k x = K u + k x_cam
+   弹簧将镜片拖向机身；PID 把镜片固定在世界坐标原点 → 图像稳定
+================================================================ */
+const ois = (() => {
+  const M = 0.001, B = 0.003, KS = 5.6, KA = 5.6; // 质量/阻尼/弹簧刚度/VCM增益
+  const DT = 0.0002, TWIN = 10, RANGE = 1.5;
+  const pid_x = new PID(3, 0, 0, -KA/KS*4, KA/KS*4);
+  const pid_y = new PID(3, 0, 0, -KA/KS*4, KA/KS*4);
+  let lx=0, lvx=0, ly=0, lvy=0, t=0;
+  let shakeMode = 'tremor';
+  let impactPending = false;
+  let tiltOn = false;
+  let noiseOn = false;
+  const histCam = [], histLens = [], histU = [];
+  const trail = [];
+  let sumC2=0, sumL2=0, nRms=0;
+  let acc = 0;
+
+  function xcam(t) {
+    if (shakeMode === 'tremor')
+      return 0.50*Math.sin(2*Math.PI*2.0*t)+0.30*Math.sin(2*Math.PI*5.0*t+1.1)+0.20*Math.sin(2*Math.PI*0.8*t+0.5);
+    if (shakeMode === 'walk')
+      return 0.80*Math.sin(2*Math.PI*1.9*t)+0.40*Math.sin(2*Math.PI*3.8*t+0.5)+0.15*Math.sin(2*Math.PI*0.5*t+1.2);
+    return 0;
+  }
+  function ycam(t) {
+    if (shakeMode === 'tremor')
+      return 0.45*Math.sin(2*Math.PI*1.5*t+0.9)+0.25*Math.sin(2*Math.PI*4.3*t+2.1)+0.15*Math.sin(2*Math.PI*0.7*t+0.3);
+    if (shakeMode === 'walk')
+      return 0.70*Math.sin(2*Math.PI*1.9*t+Math.PI/2)+0.35*Math.sin(2*Math.PI*3.8*t+1.2);
+    return 0;
+  }
+  function randn() {
+    let u=0,v=0; while(!u)u=Math.random(); while(!v)v=Math.random();
+    return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v);
+  }
+  function trimHist(arr) { while(arr.length && arr[0].t < t-TWIN-0.5) arr.shift(); }
+
+  const sliders = makeSliders("ois-sliders", [
+    {key:"kp",label:"Kp 比例",min:0,max:15,step:0.5,value:3,dec:1},
+    {key:"ki",label:"Ki 积分",min:0,max:5,step:0.1,value:0,dec:1},
+    {key:"kd",label:"Kd 微分",min:0,max:0.12,step:0.002,value:0,dec:3},
+  ], (k,v) => { pid_x[k]=v; pid_y[k]=v; });
+
+  function preset(kp,ki,kd) { sliders.set("kp",kp); sliders.set("ki",ki); sliders.set("kd",kd); reset(); }
+  function reset() {
+    lx=0;lvx=0;ly=0;lvy=0;t=0;pid_x.reset();pid_y.reset();
+    histCam.length=0;histLens.length=0;histU.length=0;trail.length=0;
+    sumC2=0;sumL2=0;nRms=0;tiltOn=false;acc=0;
+  }
+
+  makeButtons("ois-btns", [
+    {label:"无防抖(对照)",fn:()=>preset(0,0,0)},
+    {label:"纯P=10(振铃)",fn:()=>preset(10,0,0)},
+    {label:"PD 推荐",fn:()=>preset(10,0,0.04)},
+    {label:"完整 PID",fn:()=>preset(10,2,0.04)},
+    {label:"手持微抖",fn:()=>{shakeMode='tremor';reset();}},
+    {label:"行走抖动",fn:()=>{shakeMode='walk';reset();}},
+    {label:"突发冲击",danger:true,fn:()=>{impactPending=true;}},
+    {label:"模拟相机倾斜 ±",danger:true,fn:function(){
+      tiltOn=!tiltOn; this.textContent=tiltOn?"恢复水平":"模拟相机倾斜 ±";
+    }},
+    {label:"传感器噪声 OFF",fn:function(){
+      noiseOn=!noiseOn; this.textContent=noiseOn?"传感器噪声 ON ⚠":"传感器噪声 OFF";
+    }},
+    {label:"复位仿真",fn:reset},
+  ]);
+
+  const bars = makeBars("ois-bars");
+  const metrics = makeMetrics("ois-metrics", ["稳定效率","镜片X(mm)","镜片Y(mm)","倾斜偏差"]);
+
+  function step(elapsed) {
+    acc = Math.min(acc + elapsed, 0.06);
+    while (acc >= DT) {
+      acc -= DT;
+      const xc = xcam(t), yc = ycam(t);
+      const noise = noiseOn ? randn()*0.03 : 0;
+      const tiltF = tiltOn ? 8.0 : 0; // 倾斜产生的弹簧偏置力 (N)，使偏差更明显
+
+      // X 轴
+      const ux = pid_x.step(0, lx+noise, DT);
+      if (impactPending) { lvx += 4.0; impactPending = false; }
+      const ax = (KA*ux - B*lvx - KS*lx + KS*xc + tiltF) / M;
+      lvx += ax*DT; lx += lvx*DT;
+      lx = Math.max(-RANGE, Math.min(RANGE, lx));
+
+      // Y 轴（独立 PID，同参数）
+      const uy = pid_y.step(0, ly+noise, DT);
+      const ay = (KA*uy - B*lvy - KS*ly + KS*yc) / M;
+      lvy += ay*DT; ly += lvy*DT;
+      ly = Math.max(-RANGE, Math.min(RANGE, ly));
+
+      const now = t;
+      histCam.push({t:now, v:xc});
+      histLens.push({t:now, v:lx});
+      histU.push({t:now, v:ux});
+      trimHist(histCam); trimHist(histLens); trimHist(histU);
+
+      sumC2 += xc*xc; sumL2 += lx*lx; nRms++;
+      if (nRms > 200000) { sumC2=0; sumL2=0; nRms=0; }
+      t += DT;
+
+      if (Math.floor(t/0.006) > Math.floor((t-DT)/0.006)) {
+        trail.push({x:lx, y:ly, cx:xc, cy:yc});
+        if (trail.length > 80) trail.shift();
+      }
+    }
+  }
+
+  function draw() {
+    const cv = document.getElementById("ois-anim"), ctx = cv.getContext("2d");
+    ctx.clearRect(0,0,300,300); ctx.fillStyle="#0d1117"; ctx.fillRect(0,0,300,300);
+    const CX=150, CY=130, SC=42; // px per mm
+    const xc=xcam(t), yc=ycam(t);
+    // 机身（随相机晃动，轻微可视化）
+    const hx = CX + xc*SC*0.35, hy = CY - yc*SC*0.35;
+    ctx.fillStyle="#1b222c"; ctx.strokeStyle="#5b6b7d"; ctx.lineWidth=3;
+    ctx.fillRect(hx-78,hy-63,156,126); ctx.strokeRect(hx-78,hy-63,156,126);
+    ctx.fillStyle="#0a0f15"; ctx.beginPath(); ctx.arc(hx,hy,44,0,Math.PI*2); ctx.fill();
+    ctx.strokeStyle="#3a5068"; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(hx,hy,44,0,Math.PI*2); ctx.stroke();
+    // OIS 行程范围虚线框
+    ctx.strokeStyle="#2e3a4870"; ctx.lineWidth=1; ctx.setLineDash([3,3]);
+    ctx.strokeRect(CX-SC*RANGE*0.6, CY-SC*RANGE*0.6, SC*RANGE*1.2, SC*RANGE*1.2); ctx.setLineDash([]);
+    ctx.fillStyle="#8a97a6"; ctx.font="9px sans-serif"; ctx.fillText("OIS行程 ±1.5mm", CX-SC*RANGE*0.6, CY+SC*RANGE*0.6+11);
+    // 世界中心十字
+    ctx.strokeStyle="#ffb74d30"; ctx.lineWidth=1; ctx.setLineDash([4,3]);
+    ctx.beginPath(); ctx.moveTo(CX-28,CY); ctx.lineTo(CX+28,CY); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(CX,CY-28); ctx.lineTo(CX,CY+28); ctx.stroke(); ctx.setLineDash([]);
+    // 镜片运动轨迹
+    if (trail.length>1) {
+      ctx.strokeStyle="#4fc3f718"; ctx.lineWidth=1.5;
+      ctx.beginPath();
+      for(let i=0;i<trail.length;i++){
+        const px=CX+trail[i].x*SC, py=CY-trail[i].y*SC;
+        if(i===0) ctx.moveTo(px,py); else ctx.lineTo(px,py);
+      }
+      ctx.stroke();
+    }
+    // 镜片元件（世界坐标固定）
+    const lxp=CX+lx*SC, lyp=CY-ly*SC;
+    ctx.fillStyle="#4fc3f730"; ctx.beginPath(); ctx.arc(lxp,lyp,21,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle="#4fc3f7"; ctx.beginPath(); ctx.arc(lxp,lyp,15,0,Math.PI*2); ctx.fill();
+    ctx.strokeStyle="#04263b"; ctx.lineWidth=1.5;
+    ctx.beginPath(); ctx.moveTo(lxp-9,lyp); ctx.lineTo(lxp+9,lyp); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(lxp,lyp-9); ctx.lineTo(lxp,lyp+9); ctx.stroke();
+    ctx.fillStyle="#4fc3f7"; ctx.font="10px sans-serif"; ctx.fillText("OIS镜片",lxp+18,lyp+4);
+    if (tiltOn) { ctx.fillStyle="#e57373"; ctx.font="12px sans-serif"; ctx.fillText("⚠ 相机倾斜中",90,22); }
+    if (noiseOn) { ctx.fillStyle="#ffb74d"; ctx.font="12px sans-serif"; ctx.fillText("⚠ 传感器噪声ON",82,38); }
+    // ---- 对比取景框 ----
+    const B=54, BS=18;
+    // 无防抖（左下）
+    const bx1=12, by1=222;
+    ctx.fillStyle="#1b222c"; ctx.strokeStyle="#7a4a4a"; ctx.lineWidth=1.5;
+    ctx.fillRect(bx1,by1,B,B); ctx.strokeRect(bx1,by1,B,B);
+    ctx.strokeStyle="#2a3440"; ctx.lineWidth=0.5;
+    ctx.beginPath(); ctx.moveTo(bx1+2,by1+B/2); ctx.lineTo(bx1+B-2,by1+B/2); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(bx1+B/2,by1+2); ctx.lineTo(bx1+B/2,by1+B-2); ctx.stroke();
+    const s1x=bx1+B/2-xc*BS, s1y=by1+B/2+yc*BS;
+    if(s1x>bx1+1&&s1x<bx1+B-1&&s1y>by1+1&&s1y<by1+B-1){
+      ctx.fillStyle="#e57373"; ctx.beginPath(); ctx.arc(s1x,s1y,3,0,Math.PI*2); ctx.fill();
+    }
+    ctx.fillStyle="#e57373"; ctx.font="9px sans-serif"; ctx.fillText("无防抖",bx1+4,by1+B+11);
+    // 有OIS（右下）
+    const bx2=234, by2=222;
+    ctx.fillStyle="#1b222c"; ctx.strokeStyle="#2a5a3a"; ctx.lineWidth=1.5;
+    ctx.fillRect(bx2,by2,B,B); ctx.strokeRect(bx2,by2,B,B);
+    ctx.strokeStyle="#2a3440"; ctx.lineWidth=0.5;
+    ctx.beginPath(); ctx.moveTo(bx2+2,by2+B/2); ctx.lineTo(bx2+B-2,by2+B/2); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(bx2+B/2,by2+2); ctx.lineTo(bx2+B/2,by2+B-2); ctx.stroke();
+    const s2x=bx2+B/2-lx*BS, s2y=by2+B/2+ly*BS;
+    if(s2x>bx2+1&&s2x<bx2+B-1&&s2y>by2+1&&s2y<by2+B-1){
+      ctx.fillStyle="#81c784"; ctx.beginPath(); ctx.arc(s2x,s2y,3,0,Math.PI*2); ctx.fill();
+    }
+    ctx.fillStyle="#81c784"; ctx.font="9px sans-serif"; ctx.fillText("有OIS",bx2+9,by2+B+11);
+    // 模式标签
+    ctx.fillStyle="#8a97a6"; ctx.font="10px sans-serif";
+    ctx.fillText({tremor:"手持微抖",walk:"行走抖动",still:"静止"}[shakeMode]||"", 100, 292);
+
+    // 曲线图
+    drawChart(document.getElementById("ois-chart"), [
+      {name:"相机抖动 x_cam", color:"#ffb74d", dash:[6,4], data:histCam},
+      {name:"镜片位置 x_lens(=图像抖动)", color:"#4fc3f7", data:histLens},
+      {name:"驱动电流×0.2", color:"#81c78430", width:1, data:histU.map(p=>({t:p.t,v:p.v*0.2}))},
+    ], t, TWIN, -1.6, 1.6, "位移(mm)");
+
+    const eff = nRms>500&&sumC2>0 ? Math.max(0,(1-Math.sqrt(sumL2/sumC2))*100) : 0;
+    bars([pid_x.p, pid_x.i, pid_x.d, pid_x.u], KA/KS*3);
+    const tiltLabel = tiltOn&&pid_x.ki<0.1 ? Math.abs(lx).toFixed(3)+" mm ⚠" : tiltOn ? "≈0 mm(I消除)" : "关闭";
+    metrics([eff.toFixed(0)+"%", lx.toFixed(3), ly.toFixed(3), tiltLabel]);
+  }
+  return { step, draw, reset };
+})();
+
+const modules = { lab, motor, temp, drone, ois };
 let activeTab = "theory";
 document.getElementById("nav").addEventListener("click", e => {
   const btn = e.target.closest("button"); if (!btn) return;
